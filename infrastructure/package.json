@@ -1,0 +1,20 @@
+{
+  "name": "ai-sw-program-manager-infrastructure",
+  "version": "1.0.0",
+  "description": "AWS CDK infrastructure for AI SW Program Manager",
+  "main": "app.py",
+  "scripts": {
+    "cdk": "cdk",
+    "deploy": "cdk deploy --all",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy --all"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.120.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.120.0",
+    "constructs": "^10.3.0"
+  }
+}

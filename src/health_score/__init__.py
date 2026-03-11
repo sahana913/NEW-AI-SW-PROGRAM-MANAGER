@@ -1,0 +1,1 @@
+"""Health score calculation service."""
