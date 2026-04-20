@@ -14,7 +14,9 @@ from aws_cdk import (
 )
 from constructs import Construct
 import os
-from ..lambda_optimization_config import (
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from lambda_optimization_config import (
     PROVISIONED_CONCURRENCY_CONFIG,
     MEMORY_CONFIG
 )
@@ -163,10 +165,21 @@ class ApiGatewayStack(Stack):
     def _create_authorizer(self) -> None:
         """Create Lambda Authorizer for API Gateway."""
 
+        # Import the authorizer function using from_function_attributes with
+        # same_environment=True. This tells CDK the function is in the same
+        # account/region so it can correctly resolve the ARN without emitting
+        # the '[object Object]' warning that from_function_arn() produces.
+        authorizer_fn = lambda_.Function.from_function_attributes(
+            self,
+            "ImportedAuthorizerFunction",
+            function_arn=self.authorizer_function.function_arn,
+            same_environment=True,
+        )
+
         self.authorizer = apigw.RequestAuthorizer(
             self,
             "LambdaAuthorizer",
-            handler=self.authorizer_function,
+            handler=authorizer_fn,
             identity_sources=[apigw.IdentitySource.header("Authorization")],
             results_cache_ttl=Duration.minutes(5),
             authorizer_name="ai-sw-pm-authorizer"
@@ -238,7 +251,7 @@ class ApiGatewayStack(Stack):
             "UserManagementFunction",
             function_name="ai-sw-pm-user-management",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="handler.create_user",
+            handler="handler.lambda_handler",
             code=lambda_.Code.from_asset(
                 os.path.join(os.path.dirname(__file__), "../../src/user_management")
             ),
@@ -271,7 +284,7 @@ class ApiGatewayStack(Stack):
             "JiraIntegrationFunction",
             function_name="ai-sw-pm-jira-integration",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            handler="handler.configure_jira_integration",
+            handler="handler.lambda_handler",
             code=lambda_.Code.from_asset(
                 os.path.join(os.path.dirname(__file__), "../../src/jira_integration")
             ),
@@ -514,28 +527,23 @@ class ApiGatewayStack(Stack):
     def _configure_provisioned_concurrency(self) -> None:
         """
         Configure provisioned concurrency for critical Lambda functions.
-        
-        Reduces cold start latency for high-traffic functions.
+
+        Uses function.add_alias() instead of the deprecated
+        current_version.add_alias() to avoid alias replacement on every deploy.
+        Note: authorizer_function lives in AuthStack — adding an alias here
+        would create a cross-stack cyclic reference, so it is skipped.
         Validates: Requirements 23.1, 23.6
         """
-        # Configure provisioned concurrency for authorizer function
-        if "authorizer" in PROVISIONED_CONCURRENCY_CONFIG:
-            authorizer_alias = self.authorizer_function.current_version.add_alias(
-                "prod",
-                provisioned_concurrent_executions=PROVISIONED_CONCURRENCY_CONFIG["authorizer"]
-            )
-            # Note: API Gateway authorizer should reference the alias for provisioned concurrency benefits
-        
-        # Configure provisioned concurrency for dashboard function
+        # authorizer_function is owned by AuthStack — skip to avoid cyclic reference
+
         if "dashboard" in PROVISIONED_CONCURRENCY_CONFIG:
-            dashboard_alias = self.dashboard_function.current_version.add_alias(
+            self.dashboard_function.add_alias(
                 "prod",
                 provisioned_concurrent_executions=PROVISIONED_CONCURRENCY_CONFIG["dashboard"]
             )
-        
-        # Configure provisioned concurrency for user management function
+
         if "user_management" in PROVISIONED_CONCURRENCY_CONFIG:
-            user_mgmt_alias = self.user_management_function.current_version.add_alias(
+            self.user_management_function.add_alias(
                 "prod",
                 provisioned_concurrent_executions=PROVISIONED_CONCURRENCY_CONFIG["user_management"]
             )

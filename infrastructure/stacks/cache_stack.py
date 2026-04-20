@@ -2,8 +2,8 @@
 
 from aws_cdk import (
     Stack,
-    RemovalPolicy,
     CfnOutput,
+    CfnTag,
     aws_elasticache as elasticache,
     aws_ec2 as ec2,
 )
@@ -110,20 +110,14 @@ class CacheStack(Stack):
             cache_parameter_group_name=self.parameter_group.ref,
             at_rest_encryption_enabled=True,
             transit_encryption_enabled=True,
-            auth_token_enabled=False,  # Can enable for additional security
+            # auth_token_enabled is not a valid CfnReplicationGroup property; use auth_token instead
             snapshot_retention_limit=5,  # Keep 5 days of backups
             snapshot_window="03:00-05:00",  # UTC
             preferred_maintenance_window="sun:05:00-sun:07:00",  # UTC
             auto_minor_version_upgrade=True,
             tags=[
-                {
-                    "key": "Name",
-                    "value": "AI-SW-PM-Redis"
-                },
-                {
-                    "key": "Purpose",
-                    "value": "Dashboard and Report Caching"
-                }
+                CfnTag(key="Name", value="AI-SW-PM-Redis"),
+                CfnTag(key="Purpose", value="Dashboard and Report Caching"),
             ]
         )
 

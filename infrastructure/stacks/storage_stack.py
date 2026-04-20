@@ -25,7 +25,7 @@ class StorageStack(Stack):
         **kwargs
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
-        
+
         self.vpc = vpc
         self.opensearch_security_group = opensearch_security_group
 
@@ -48,27 +48,7 @@ class StorageStack(Stack):
     def _create_s3_buckets(self) -> None:
         """Create S3 buckets for documents and reports."""
 
-        # Documents bucket
-        self.documents_bucket = s3.Bucket(
-            self,
-            "DocumentsBucket",
-            bucket_name=None,  # Auto-generate unique name
-            encryption=s3.BucketEncryption.KMS,
-            encryption_key=self.encryption_key,
-            versioned=True,
-            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            enforce_ssl=True,
-            lifecycle_rules=[
-                s3.LifecycleRule(
-                    id="DeleteOldVersions",
-                    noncurrent_version_expiration=Duration.days(90)
-                )
-            ],
-            removal_policy=RemovalPolicy.RETAIN,
-            auto_delete_objects=False
-        )
-
-        # Enable server access logging
+        # Access logs bucket must be created FIRST so documents_bucket can reference it
         self.documents_access_logs_bucket = s3.Bucket(
             self,
             "DocumentsAccessLogsBucket",
@@ -85,21 +65,42 @@ class StorageStack(Stack):
             auto_delete_objects=True
         )
 
-        self.documents_bucket.add_lifecycle_rule(
-            id="TransitionToIA",
-            transitions=[
-                s3.Transition(
-                    storage_class=s3.StorageClass.INFREQUENT_ACCESS,
-                    transition_after=Duration.days(30)
-                )
-            ]
+        # Documents bucket — wired to access logs bucket
+        self.documents_bucket = s3.Bucket(
+            self,
+            "DocumentsBucket",
+            bucket_name=None,
+            encryption=s3.BucketEncryption.KMS,
+            encryption_key=self.encryption_key,
+            versioned=True,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            server_access_logs_bucket=self.documents_access_logs_bucket,
+            server_access_logs_prefix="documents-access-logs/",
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="DeleteOldVersions",
+                    noncurrent_version_expiration=Duration.days(90)
+                ),
+                s3.LifecycleRule(
+                    id="TransitionToIA",
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.INFREQUENT_ACCESS,
+                            transition_after=Duration.days(30)
+                        )
+                    ]
+                ),
+            ],
+            removal_policy=RemovalPolicy.RETAIN,
+            auto_delete_objects=False
         )
 
         # Reports bucket
         self.reports_bucket = s3.Bucket(
             self,
             "ReportsBucket",
-            bucket_name=None,  # Auto-generate unique name
+            bucket_name=None,
             encryption=s3.BucketEncryption.KMS,
             encryption_key=self.encryption_key,
             versioned=True,
@@ -118,7 +119,7 @@ class StorageStack(Stack):
                             transition_after=Duration.days(30)
                         )
                     ]
-                )
+                ),
             ],
             removal_policy=RemovalPolicy.RETAIN,
             auto_delete_objects=False
@@ -128,7 +129,7 @@ class StorageStack(Stack):
         self.model_artifacts_bucket = s3.Bucket(
             self,
             "ModelArtifactsBucket",
-            bucket_name=None,  # Auto-generate unique name
+            bucket_name=None,
             encryption=s3.BucketEncryption.KMS,
             encryption_key=self.encryption_key,
             versioned=True,
@@ -141,7 +142,6 @@ class StorageStack(Stack):
     def _create_opensearch_domain(self) -> None:
         """Create OpenSearch domain for vector search in private subnet."""
 
-        # Create OpenSearch domain in private subnet with provided security group
         self.opensearch_domain = opensearch.Domain(
             self,
             "OpenSearchDomain",
@@ -177,7 +177,7 @@ class StorageStack(Stack):
             removal_policy=RemovalPolicy.RETAIN
         )
 
-        # Grant access to Lambda functions (will be configured later)
+        # Grant Lambda functions access to OpenSearch
         self.opensearch_domain.add_access_policies(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,

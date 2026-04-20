@@ -26,10 +26,10 @@ class VpcNetworkSecurityStack(Stack):
         # Create VPC with private subnets for RDS and OpenSearch
         self.vpc = self._create_vpc()
 
-        # Create security groups with least privilege rules
+        # Lambda SG must be created first — RDS and OpenSearch SGs reference it
+        self.lambda_security_group = self._create_lambda_security_group()
         self.rds_security_group = self._create_rds_security_group()
         self.opensearch_security_group = self._create_opensearch_security_group()
-        self.lambda_security_group = self._create_lambda_security_group()
 
         # Enable VPC Flow Logs
         self._enable_vpc_flow_logs()
@@ -78,11 +78,12 @@ class VpcNetworkSecurityStack(Stack):
         )
 
         # Allow PostgreSQL access only from Lambda security group
-        # This will be configured after Lambda security group is created
         sg.add_ingress_rule(
-            peer=ec2.Peer.ipv4(self.vpc.vpc_cidr_block),
+            peer=ec2.Peer.security_group_id(
+                self.lambda_security_group.security_group_id
+            ),
             connection=ec2.Port.tcp(5432),
-            description="Allow PostgreSQL from VPC CIDR (will be restricted to Lambda SG)"
+            description="Allow PostgreSQL from Lambda security group only"
         )
 
         return sg

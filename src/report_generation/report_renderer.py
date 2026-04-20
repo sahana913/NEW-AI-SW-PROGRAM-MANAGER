@@ -1,20 +1,23 @@
 """HTML report rendering with charts for weekly status reports."""
 
-import sys
-import os
+from shared.logger import get_logger
+from shared.errors import ProcessingError
 import base64
-from io import BytesIO
-from typing import Dict, List, Any, Optional
+import os
+import sys
 from datetime import datetime
+from io import BytesIO
+from typing import Any, Dict, List, Optional
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     import matplotlib
-    matplotlib.use('Agg')  # Use non-interactive backend
-    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")  # Use non-interactive backend
     import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
 except ImportError:
     matplotlib = None
@@ -22,64 +25,66 @@ except ImportError:
     mdates = None
     Figure = None
 
-from shared.logger import get_logger
-from shared.errors import ProcessingError
 
 logger = get_logger()
 
 
-def generate_velocity_chart(velocity_data: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+def generate_velocity_chart(
+    velocity_data: Dict[str, List[Dict[str, Any]]]
+) -> Optional[str]:
     """
     Generate velocity trend chart as base64-encoded PNG.
-    
+
     Args:
         velocity_data: Dictionary mapping project_id to sprint velocity data
-        
+
     Returns:
         Base64-encoded PNG image string, or None if matplotlib not available
     """
     if not plt:
         logger.warning("matplotlib not available, skipping chart generation")
         return None
-    
+
     try:
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
         # Plot velocity for each project
         for project_id, sprints in velocity_data.items():
             if not sprints:
                 continue
-            
+
             # Sort by start date
-            sprints_sorted = sorted(sprints, key=lambda s: s.get('start_date', ''))
-            
-            sprint_names = [s.get('sprint_name', '')[:15] for s in sprints_sorted]
-            velocities = [s.get('velocity', 0) for s in sprints_sorted]
-            
-            project_name = sprints_sorted[0].get('project_name', project_id)[:20]
-            
-            ax.plot(sprint_names, velocities, marker='o', label=project_name, linewidth=2)
-        
-        ax.set_xlabel('Sprint', fontsize=12)
-        ax.set_ylabel('Velocity (Story Points)', fontsize=12)
-        ax.set_title('Sprint Velocity Trends', fontsize=14, fontweight='bold')
-        ax.legend(loc='best')
+            sprints_sorted = sorted(sprints, key=lambda s: s.get("start_date", ""))
+
+            sprint_names = [s.get("sprint_name", "")[:15] for s in sprints_sorted]
+            velocities = [s.get("velocity", 0) for s in sprints_sorted]
+
+            project_name = sprints_sorted[0].get("project_name", project_id)[:20]
+
+            ax.plot(
+                sprint_names, velocities, marker="o", label=project_name, linewidth=2
+            )
+
+        ax.set_xlabel("Sprint", fontsize=12)
+        ax.set_ylabel("Velocity (Story Points)", fontsize=12)
+        ax.set_title("Sprint Velocity Trends", fontsize=14, fontweight="bold")
+        ax.legend(loc="best")
         ax.grid(True, alpha=0.3)
-        
+
         # Rotate x-axis labels for readability
-        plt.xticks(rotation=45, ha='right')
-        
+        plt.xticks(rotation=45, ha="right")
+
         plt.tight_layout()
-        
+
         # Convert to base64
         buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
         buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
         plt.close(fig)
-        
+
         return image_base64
-        
+
     except Exception as e:
         logger.error(f"Failed to generate velocity chart: {str(e)}")
         return None
@@ -88,67 +93,67 @@ def generate_velocity_chart(velocity_data: Dict[str, List[Dict[str, Any]]]) -> O
 def generate_backlog_chart(backlog_data: Dict[str, Dict[str, Any]]) -> Optional[str]:
     """
     Generate backlog status chart as base64-encoded PNG.
-    
+
     Args:
         backlog_data: Dictionary mapping project_id to backlog metrics
-        
+
     Returns:
         Base64-encoded PNG image string, or None if matplotlib not available
     """
     if not plt:
         logger.warning("matplotlib not available, skipping chart generation")
         return None
-    
+
     try:
         if not backlog_data:
             return None
-        
+
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
         # Prepare data
         projects = []
         open_items = []
         bugs = []
         features = []
         tech_debt = []
-        
+
         for project_id, data in list(backlog_data.items())[:10]:  # Limit to 10 projects
-            projects.append(data.get('project_name', project_id)[:20])
-            open_items.append(data.get('open_items', 0))
-            bugs.append(data.get('bugs', 0))
-            features.append(data.get('features', 0))
-            tech_debt.append(data.get('tech_debt', 0))
-        
+            projects.append(data.get("project_name", project_id)[:20])
+            open_items.append(data.get("open_items", 0))
+            bugs.append(data.get("bugs", 0))
+            features.append(data.get("features", 0))
+            tech_debt.append(data.get("tech_debt", 0))
+
         # Create stacked bar chart
         x = range(len(projects))
         width = 0.6
-        
-        ax.bar(x, bugs, width, label='Bugs', color='#e74c3c')
-        ax.bar(x, features, width, bottom=bugs, label='Features', color='#3498db')
-        
+
+        ax.bar(x, bugs, width, label="Bugs", color="#e74c3c")
+        ax.bar(x, features, width, bottom=bugs, label="Features", color="#3498db")
+
         # Calculate bottom for tech debt
         bottom = [bugs[i] + features[i] for i in range(len(bugs))]
-        ax.bar(x, tech_debt, width, bottom=bottom, label='Tech Debt', color='#f39c12')
-        
-        ax.set_xlabel('Project', fontsize=12)
-        ax.set_ylabel('Number of Items', fontsize=12)
-        ax.set_title('Backlog Status by Project', fontsize=14, fontweight='bold')
+        ax.bar(x, tech_debt, width, bottom=bottom, label="Tech Debt", color="#f39c12")
+
+        ax.set_xlabel("Project", fontsize=12)
+        ax.set_ylabel("Number of Items", fontsize=12)
+        ax.set_title("Backlog Status by Project", fontsize=14, fontweight="bold")
         ax.set_xticks(x)
-        ax.set_xticklabels(projects, rotation=45, ha='right')
-        ax.legend(loc='best')
-        ax.grid(True, alpha=0.3, axis='y')
-        
+        ax.set_xticklabels(projects, rotation=45, ha="right")
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3, axis="y")
+
         plt.tight_layout()
-        
+
         # Convert to base64
         buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
         buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
         plt.close(fig)
-        
+
         return image_base64
-        
+
     except Exception as e:
         logger.error(f"Failed to generate backlog chart: {str(e)}")
         return None
@@ -157,84 +162,88 @@ def generate_backlog_chart(backlog_data: Dict[str, Dict[str, Any]]) -> Optional[
 def generate_risk_distribution_chart(risks: List[Dict[str, Any]]) -> Optional[str]:
     """
     Generate risk distribution pie chart as base64-encoded PNG.
-    
+
     Args:
         risks: List of risk alerts
-        
+
     Returns:
         Base64-encoded PNG image string, or None if matplotlib not available
     """
     if not plt:
         logger.warning("matplotlib not available, skipping chart generation")
         return None
-    
+
     try:
         if not risks:
             return None
-        
+
         # Count risks by severity
-        severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+        severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
         for risk in risks:
-            severity = risk.get('severity', 'LOW')
+            severity = risk.get("severity", "LOW")
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
-        
+
         # Filter out zero counts
         labels = []
         sizes = []
         colors = []
         color_map = {
-            'CRITICAL': '#c0392b',
-            'HIGH': '#e74c3c',
-            'MEDIUM': '#f39c12',
-            'LOW': '#3498db'
+            "CRITICAL": "#c0392b",
+            "HIGH": "#e74c3c",
+            "MEDIUM": "#f39c12",
+            "LOW": "#3498db",
         }
-        
-        for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
+
+        for severity in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
             if severity_counts[severity] > 0:
                 labels.append(severity)
                 sizes.append(severity_counts[severity])
                 colors.append(color_map[severity])
-        
+
         if not sizes:
             return None
-        
+
         fig, ax = plt.subplots(figsize=(8, 6))
-        
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-               startangle=90, textprops={'fontsize': 12})
-        ax.set_title('Risk Distribution by Severity', fontsize=14, fontweight='bold')
-        
+
+        ax.pie(
+            sizes,
+            labels=labels,
+            colors=colors,
+            autopct="%1.1f%%",
+            startangle=90,
+            textprops={"fontsize": 12},
+        )
+        ax.set_title("Risk Distribution by Severity", fontsize=14, fontweight="bold")
+
         plt.tight_layout()
-        
+
         # Convert to base64
         buffer = BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
         buffer.seek(0)
-        image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        image_base64 = base64.b64encode(buffer.read()).decode("utf-8")
         plt.close(fig)
-        
+
         return image_base64
-        
+
     except Exception as e:
         logger.error(f"Failed to generate risk distribution chart: {str(e)}")
         return None
 
 
 def render_html_report(
-    report_data: Dict[str, Any],
-    narrative: str,
-    report_type: str = 'WEEKLY_STATUS'
+    report_data: Dict[str, Any], narrative: str, report_type: str = "WEEKLY_STATUS"
 ) -> str:
     """
     Render HTML report with narrative and charts.
-    
+
     Validates: Property 37 - Report Content Completeness
-    
+
     Args:
         report_data: Aggregated report data
         narrative: AI-generated narrative summary
         report_type: Type of report (WEEKLY_STATUS or EXECUTIVE_SUMMARY)
-        
+
     Returns:
         HTML string
     """
@@ -243,20 +252,20 @@ def render_html_report(
         velocity_chart = None
         backlog_chart = None
         risk_chart = None
-        
-        if report_type == 'WEEKLY_STATUS':
-            velocity_data = report_data.get('velocity_trends', {})
+
+        if report_type == "WEEKLY_STATUS":
+            velocity_data = report_data.get("velocity_trends", {})
             if velocity_data:
                 velocity_chart = generate_velocity_chart(velocity_data)
-            
-            backlog_data = report_data.get('backlog_status', {})
+
+            backlog_data = report_data.get("backlog_status", {})
             if backlog_data:
                 backlog_chart = generate_backlog_chart(backlog_data)
-        
-        risks = report_data.get('risks', [])
+
+        risks = report_data.get("risks", [])
         if risks:
             risk_chart = generate_risk_distribution_chart(risks)
-        
+
         # Build HTML
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -410,16 +419,16 @@ def render_html_report(
         <h1>{report_type.replace('_', ' ').title()}</h1>
         <div class="date">Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p UTC')}</div>
     </div>
-    
+
     <div class="section">
         <h2>Executive Summary</h2>
         <div class="narrative">{narrative}</div>
     </div>
 """
-        
+
         # Add project health overview if available
-        projects = report_data.get('projects', [])
-        if projects and report_type == 'WEEKLY_STATUS':
+        projects = report_data.get("projects", [])
+        if projects and report_type == "WEEKLY_STATUS":
             html += """
     <div class="section">
         <h2>Project Health Overview</h2>
@@ -434,13 +443,15 @@ def render_html_report(
             <tbody>
 """
             for project in projects[:10]:  # Limit to 10
-                last_sync = project.get('last_sync_at', 'N/A')
-                if last_sync and last_sync != 'N/A':
+                last_sync = project.get("last_sync_at", "N/A")
+                if last_sync and last_sync != "N/A":
                     try:
-                        last_sync = datetime.fromisoformat(str(last_sync)).strftime('%Y-%m-%d %H:%M')
+                        last_sync = datetime.fromisoformat(str(last_sync)).strftime(
+                            "%Y-%m-%d %H:%M"
+                        )
                     except:
                         pass
-                
+
                 html += f"""
                 <tr>
                     <td>{project.get('project_name', 'Unknown')}</td>
@@ -453,9 +464,9 @@ def render_html_report(
         </table>
     </div>
 """
-        
+
         # Add completed milestones
-        completed_milestones = report_data.get('completed_milestones', [])
+        completed_milestones = report_data.get("completed_milestones", [])
         if completed_milestones:
             html += """
     <div class="section">
@@ -475,9 +486,9 @@ def render_html_report(
         </ul>
     </div>
 """
-        
+
         # Add upcoming milestones
-        upcoming_milestones = report_data.get('upcoming_milestones', [])
+        upcoming_milestones = report_data.get("upcoming_milestones", [])
         if upcoming_milestones:
             html += """
     <div class="section">
@@ -485,10 +496,10 @@ def render_html_report(
         <ul class="milestone-list">
 """
             for milestone in upcoming_milestones[:10]:  # Limit to 10
-                status = milestone.get('status', 'ON_TRACK')
-                badge_class = 'at-risk' if status == 'AT_RISK' else 'completed'
-                completion = milestone.get('completion_percentage', 0)
-                
+                status = milestone.get("status", "ON_TRACK")
+                badge_class = "at-risk" if status == "AT_RISK" else "completed"
+                completion = milestone.get("completion_percentage", 0)
+
                 html += f"""
             <li class="milestone-item">
                 <strong>{milestone.get('milestone_name', 'Unknown')}</strong>
@@ -501,7 +512,7 @@ def render_html_report(
         </ul>
     </div>
 """
-        
+
         # Add risk alerts
         if risks:
             html += """
@@ -510,7 +521,7 @@ def render_html_report(
         <ul class="risk-list">
 """
             for risk in risks[:15]:  # Limit to 15
-                severity = risk.get('severity', 'LOW').lower()
+                severity = risk.get("severity", "LOW").lower()
                 html += f"""
             <li class="risk-item {severity}">
                 <strong>{risk.get('title', 'Unknown Risk')}</strong>
@@ -523,9 +534,9 @@ def render_html_report(
         </ul>
     </div>
 """
-        
+
         # Add charts
-        if report_type == 'WEEKLY_STATUS':
+        if report_type == "WEEKLY_STATUS":
             if velocity_chart:
                 html += f"""
     <div class="section">
@@ -535,7 +546,7 @@ def render_html_report(
         </div>
     </div>
 """
-            
+
             if backlog_chart:
                 html += f"""
     <div class="section">
@@ -545,7 +556,7 @@ def render_html_report(
         </div>
     </div>
 """
-        
+
         if risk_chart:
             html += f"""
     <div class="section">
@@ -555,10 +566,10 @@ def render_html_report(
         </div>
     </div>
 """
-        
+
         # Add predictions if available
-        predictions = report_data.get('predictions', {})
-        if predictions and report_type == 'WEEKLY_STATUS':
+        predictions = report_data.get("predictions", {})
+        if predictions and report_type == "WEEKLY_STATUS":
             html += """
     <div class="section">
         <h2>Predictions & Insights</h2>
@@ -575,8 +586,8 @@ def render_html_report(
 """
             for project_id, pred_types in list(predictions.items())[:10]:
                 for pred_type, pred in pred_types.items():
-                    value = pred.get('predictionValue', 0)
-                    confidence = pred.get('confidenceScore', 0)
+                    value = pred.get("predictionValue", 0)
+                    confidence = pred.get("confidenceScore", 0)
                     html += f"""
                 <tr>
                     <td>{project_id[:20]}</td>
@@ -590,7 +601,7 @@ def render_html_report(
         </table>
     </div>
 """
-        
+
         html += """
     <div class="footer">
         <p>This report was automatically generated by the AI SW Program Manager platform.</p>
@@ -599,12 +610,12 @@ def render_html_report(
 </body>
 </html>
 """
-        
+
         return html
-        
+
     except Exception as e:
         logger.error(f"Failed to render HTML report: {str(e)}")
         raise ProcessingError(
             f"Failed to render HTML report: {str(e)}",
-            processing_type="Report_Rendering"
+            processing_type="Report_Rendering",
         )

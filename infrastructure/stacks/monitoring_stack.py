@@ -7,7 +7,6 @@ from aws_cdk import (
     aws_logs as logs,
     aws_cloudwatch as cloudwatch,
     aws_sns as sns,
-    aws_sns_subscriptions as sns_subscriptions,
     aws_cloudwatch_actions as cw_actions,
 )
 from constructs import Construct
@@ -101,7 +100,7 @@ class MonitoringStack(Stack):
         self.api_error_alarm = cloudwatch.Alarm(
             self,
             "APIErrorRateAlarm",
-            alarm_name="ai-sw-pm-api-error-rate",
+            alarm_name="ai-sw-pm-monitoring-api-error-rate",
             alarm_description="Alert when API error rate exceeds 5%",
             metric=cloudwatch.Metric(
                 namespace="AWS/ApiGateway",
@@ -123,7 +122,7 @@ class MonitoringStack(Stack):
         self.api_latency_alarm = cloudwatch.Alarm(
             self,
             "APILatencyAlarm",
-            alarm_name="ai-sw-pm-api-latency",
+            alarm_name="ai-sw-pm-monitoring-api-latency",
             alarm_description="Alert when API latency exceeds 2 seconds",
             metric=cloudwatch.Metric(
                 namespace="AWS/ApiGateway",

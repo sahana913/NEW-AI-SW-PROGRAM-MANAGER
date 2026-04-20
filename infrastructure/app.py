@@ -113,12 +113,14 @@ api_gateway_stack = ApiGatewayStack(
 )
 
 # Add dependencies
+# Note: auth_stack dependency on api_gateway_stack is implicit via constructor
+# arguments (user_pool, authorizer_function) — do NOT add it explicitly
+# as it creates a cyclic reference through the UsagePlan API stage.
 database_stack.add_dependency(vpc_network_stack)
 storage_stack.add_dependency(vpc_network_stack)
 cache_stack.add_dependency(vpc_network_stack)
 audit_logging_stack.add_dependency(monitoring_stack)
 ingestion_workflow_stack.add_dependency(database_stack)
-api_gateway_stack.add_dependency(auth_stack)
 api_gateway_stack.add_dependency(database_stack)
 api_gateway_stack.add_dependency(monitoring_stack)
 

@@ -10,7 +10,9 @@ from aws_cdk import (
 )
 from constructs import Construct
 import os
-from ..lambda_optimization_config import MEMORY_CONFIG
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from lambda_optimization_config import MEMORY_CONFIG
 
 
 class AuthStack(Stack):
@@ -94,7 +96,6 @@ class AuthStack(Stack):
             auth_flows=cognito.AuthFlow(
                 user_password=True,
                 user_srp=True,
-                custom=False,
                 admin_user_password=True
             ),
             # Token validity

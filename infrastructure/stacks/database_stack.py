@@ -361,7 +361,7 @@ class DatabaseStack(Stack):
             self,
             "PostgreSQLInstance",
             engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.VER_15_4
+                version=rds.PostgresEngineVersion.VER_15
             ),
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.BURSTABLE3,

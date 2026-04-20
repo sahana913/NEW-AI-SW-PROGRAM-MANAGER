@@ -346,7 +346,7 @@ class IngestionWorkflowStack(Stack):
             self,
             "IngestionWorkflowStateMachine",
             state_machine_name="ai-sw-pm-ingestion-workflow",
-            definition=definition,
+            definition_body=sfn.DefinitionBody.from_chainable(definition),
             timeout=Duration.minutes(30),
             tracing_enabled=True,
             logs=sfn.LogOptions(
@@ -654,11 +654,14 @@ def lambda_handler(event, context):
         self.ingestion_queue.grant_send_messages(self.manual_trigger_lambda)
 
         # Create API Gateway REST API
+        # cloud_watch_role=False avoids the "CloudWatch role already exists" error
+        # when multiple stacks deploy API Gateway in the same account/region
         self.api = apigw.RestApi(
             self,
             "IngestionTriggerAPI",
             rest_api_name="ai-sw-pm-ingestion-trigger",
             description="API for manually triggering data ingestion workflow",
+            cloud_watch_role=False,
             deploy_options=apigw.StageOptions(
                 stage_name="prod",
                 throttling_rate_limit=10,

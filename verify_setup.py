@@ -7,6 +7,7 @@ This script checks if the development environment is properly configured.
 import sys
 import importlib.util
 
+
 def check_module(module_name, package_name=None):
     """Check if a Python module is installed."""
     package_name = package_name or module_name
@@ -18,13 +19,14 @@ def check_module(module_name, package_name=None):
         print(f"❌ {package_name} is NOT installed")
         return False
 
+
 def main():
     """Main verification function."""
     print("=" * 60)
     print("AI SW Program Manager - Setup Verification")
     print("=" * 60)
     print()
-    
+
     # Check Python version
     print(f"Python Version: {sys.version}")
     if sys.version_info >= (3, 11):
@@ -32,11 +34,11 @@ def main():
     else:
         print("❌ Python version must be 3.11 or higher")
     print()
-    
+
     # Check required packages
     print("Checking Required Packages:")
     print("-" * 60)
-    
+
     required_packages = [
         ("boto3", "boto3 (AWS SDK)"),
         ("botocore", "botocore"),
@@ -48,16 +50,16 @@ def main():
         ("PyPDF2", "PyPDF2"),
         ("docx", "python-docx"),
     ]
-    
+
     all_installed = True
     for module, package in required_packages:
         if not check_module(module, package):
             all_installed = False
-    
+
     print()
     print("Checking Development Packages:")
     print("-" * 60)
-    
+
     dev_packages = [
         ("pytest", "pytest"),
         ("hypothesis", "hypothesis"),
@@ -67,11 +69,11 @@ def main():
         ("pylint", "pylint"),
         ("aws_cdk", "aws-cdk-lib"),
     ]
-    
+
     for module, package in dev_packages:
         if not check_module(module, package):
             all_installed = False
-    
+
     print()
     print("=" * 60)
     if all_installed:
@@ -93,6 +95,7 @@ def main():
         print("  pip install -r requirements.txt")
         print("  pip install -r requirements-dev.txt")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
