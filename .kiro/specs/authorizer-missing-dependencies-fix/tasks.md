@@ -1,0 +1,94 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Lambda Authorizer Missing Dependencies
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: For this deterministic bug, scope the property to the concrete failing case - Lambda deployment without bundling configuration
+  - Test that the Lambda authorizer function fails to import the `jwt` module when deployed without bundling configuration
+  - Test implementation details from Bug Condition in design: deployment.code_method == "Code.from_asset" AND deployment.bundling_config == None
+  - The test assertions should match the Expected Behavior Properties from design: successful jwt import and token validation
+  - Run test on UNFIXED code (current CDK stack without bundling)
+  - **EXPECTED OUTCOME**: Test FAILS with "Runtime.ImportModuleError: Unable to import module 'handler': No module named 'jwt'" (this is correct - it proves the bug exists)
+  - Document counterexamples found to understand root cause:
+    - Deploy current CDK stack and invoke authorizer with test event
+    - Observe Runtime.ImportModuleError in CloudWatch Logs
+    - Inspect deployment package to confirm PyJWT and cryptography are missing
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.3, 1.4, 1.5_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Token Validation Logic Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for non-buggy inputs (if dependencies were manually installed):
+    - Valid JWT token → Authorizer extracts claims and returns Allow policy
+    - Expired JWT token → Authorizer rejects with "Unauthorized"
+    - Invalid JWT token → Authorizer rejects with "Unauthorized"
+    - Missing Authorization header → Authorizer rejects with "Unauthorized"
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements:
+    - For all valid JWT tokens with required claims (sub, email), authorizer SHALL extract user information and generate Allow policy with correct context
+    - For all expired JWT tokens, authorizer SHALL reject with "Unauthorized" exception
+    - For all invalid JWT tokens (malformed, wrong signature), authorizer SHALL reject with "Unauthorized" exception
+    - For all requests missing Authorization header, authorizer SHALL reject with "Unauthorized" exception
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code (with manually installed dependencies if possible, or document expected behavior)
+  - **EXPECTED OUTCOME**: Tests PASS on code with dependencies present (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code (or documented if dependencies cannot be manually installed)
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
+
+- [ ] 3. Fix Lambda authorizer dependency bundling
+
+  - [x] 3.1 Implement the fix in auth_stack.py
+    - Add `BundlingOptions` import to the imports section at the top of the file
+    - Modify the `lambda_.Function` constructor for the authorizer to include a `bundling` parameter in the `Code.from_asset()` call
+    - Configure bundling to install dependencies from requirements.txt using pip
+    - Use the command: `"bash", "-c", "pip install -r requirements.txt -t /asset-output && cp -au . /asset-output"`
+    - Use `lambda_.Runtime.PYTHON_3_11.bundling_image` as the bundling image
+    - Verify `src/authorizer/requirements.txt` contains PyJWT==2.8.0 and cryptography==41.0.7
+    - Do NOT modify handler.py - the import statements and validation logic remain unchanged
+    - Do NOT modify Lambda configuration (runtime, memory, timeout, environment variables, IAM permissions)
+    - _Bug_Condition: isBugCondition(deployment) where deployment.code_method == "Code.from_asset" AND deployment.bundling_config == None_
+    - _Expected_Behavior: deployment.imports_jwt_successfully == True AND deployment.validates_tokens == True AND deployment.no_runtime_errors == True_
+    - _Preservation: JWT token validation logic, IAM policy generation, authorization context passing, error handling, logging, environment variables, and IAM permissions remain unchanged_
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
+
+  - [x] 3.2 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Lambda Authorizer Imports Dependencies Successfully
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Deploy the fixed CDK stack with bundling configuration
+    - Invoke the authorizer function with a test event containing a valid JWT token
+    - Verify no Runtime.ImportModuleError occurs in CloudWatch Logs
+    - Verify authorizer successfully imports jwt module and validates tokens
+    - Inspect deployment package to confirm PyJWT and cryptography are present
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed - dependencies are bundled and imported successfully)
+    - _Requirements: 2.1, 2.3, 2.4, 2.5_
+
+  - [x] 3.3 Verify preservation tests still pass
+    - **Property 2: Preservation** - Token Validation Logic Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - Test cases:
+      - Valid JWT token → Authorizer extracts claims (sub, custom:tenant_id, custom:role, email) and returns Allow policy
+      - Expired JWT token → Authorizer rejects with "Unauthorized"
+      - Invalid JWT token → Authorizer rejects with "Unauthorized"
+      - Missing Authorization header → Authorizer rejects with "Unauthorized"
+      - Authorization context (userId, tenantId, role, email) is passed to downstream functions
+      - Lambda configuration (Python 3.11, memory, timeout) remains unchanged
+      - IAM permissions (cognito-idp:GetUser, cognito-idp:DescribeUserPool) remain unchanged
+      - Environment variable (USER_POOL_ID) remains unchanged
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions - all token validation behavior is preserved)
+    - Confirm all tests still pass after fix (no regressions)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+  - Verify bug condition test passes (dependencies are bundled and imported)
+  - Verify preservation tests pass (token validation logic unchanged)
+  - Verify no Runtime.ImportModuleError in CloudWatch Logs
+  - Verify API Gateway requests with valid tokens return successful responses (not 500 errors)
+  - Document any issues or questions for the user

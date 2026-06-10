@@ -1,0 +1,149 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - PostgreSQL Connection Failures in Serverless Environment
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate PostgreSQL connection failures in serverless deployment
+  - **Scoped PBT Approach**: Focus on concrete failing cases: Lambda functions attempting PostgreSQL connections in serverless environment
+  - Test that database operations fail when `isBugCondition(input)` is true (PostgreSQL + serverless + database operations)
+  - Deploy Lambda function with PostgreSQL dependencies to serverless environment
+  - Attempt database operations: INSERT, UPDATE, SELECT, DELETE on projects, sprints, health_scores tables
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS with connection errors, VPC networking issues, or timeout errors (this is correct - it proves the bug exists)
+  - Document counterexamples found: connection timeouts, VPC failures, cold start issues, dependency conflicts
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - API Response Compatibility and Non-Database Operations
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for operations that don't involve PostgreSQL persistence
+  - Test API Gateway endpoints that return cached/demo data (authentication, response formatting)
+  - Test business logic operations that don't require database persistence
+  - Test S3 document operations, Cognito authentication flows, CloudWatch logging
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 3. PostgreSQL to DynamoDB Migration Implementation
+
+  - [x] 3.1 Phase 1: DynamoDB Table Schema Design
+    - Create comprehensive multi-entity DynamoDB tables in `infrastructure/stacks/dynamodb_stack.py`
+    - Implement single table design pattern with composite keys: `PK = TENANT#{tenantId}`, `SK = ENTITY#{entityType}#{entityId}`
+    - Add ProjectsTable with GSIs for tenant and source queries
+    - Add SprintsTable with GSIs for project and date range queries
+    - Add BacklogItemsTable with GSIs for project and status queries
+    - Add MilestonesTable with GSIs for project and due date queries
+    - Add ResourcesTable with GSIs for project and week queries
+    - Add DependenciesTable with GSIs for project and task queries
+    - Add HealthScoresTable with GSIs for project and calculation time queries
+    - Configure optimized indexes: GSI1 for project-based queries, GSI2 for time-based queries
+    - _Bug_Condition: isBugCondition(input) where input.database_type == 'POSTGRESQL' AND input.deployment_environment == 'SERVERLESS'_
+    - _Expected_Behavior: Successful DynamoDB operations without connection failures from design_
+    - _Preservation: API response structures and tenant isolation from design_
+    - _Requirements: 2.1, 2.3, 2.4, 2.5_
+
+  - [x] 3.2 Phase 2: Data Access Layer Migration
+    - Replace PostgreSQL operations in `src/shared/database.py` with DynamoDB SDK calls
+    - Remove all `psycopg2` imports and connection pool logic: `get_connection_pool()`, `get_db_connection()`, `get_db_credentials()`
+    - Remove `execute_query()`, `execute_batch()` functions and Secrets Manager integration
+    - Implement DynamoDB operations: `get_dynamodb_client()`, `put_item()`, `get_item()`, `query()`, `batch_write_item()`
+    - Add specialized query functions: `query_by_project()`, `query_by_tenant()`, `query_by_date_range()`
+    - Maintain existing function signatures for compatibility: `insert_project()`, `insert_sprints()`, `insert_backlog_items()`, etc.
+    - Transform function implementations to use DynamoDB operations while preserving return formats
+    - _Bug_Condition: isBugCondition(input) where connection_requires_vpc_networking(input.connection)_
+    - _Expected_Behavior: DynamoDB SDK operations without VPC networking requirements from design_
+    - _Preservation: Function signatures and return formats from design_
+    - _Requirements: 2.1, 2.2, 2.6_
+
+  - [x] 3.3 Phase 3: Lambda Function Updates
+    - Update all Lambda handlers in `src/*/handler.py` to remove PostgreSQL dependencies
+    - Update `src/dashboard/handler.py` to use DynamoDB queries instead of SQL
+    - Update `src/data_storage/handler.py` to use DynamoDB operations for persistence
+    - Update `src/jira_integration/data_storage.py` to use DynamoDB for Jira data storage
+    - Update `src/database_maintenance/handler.py` to use DynamoDB maintenance operations
+    - Replace SQL queries with DynamoDB query patterns: dashboard overview, project-specific, time-range queries
+    - Implement Lambda-side aggregation for complex queries that require aggregation
+    - Maintain response formats: transform DynamoDB items to match PostgreSQL result format
+    - Preserve field names, data types, nested structures, pagination, and sorting behavior
+    - _Bug_Condition: isBugCondition(input) where input.operation IN ['INSERT', 'UPDATE', 'SELECT', 'DELETE']_
+    - _Expected_Behavior: Successful data operations using DynamoDB from design_
+    - _Preservation: JSON response structures and business logic from design_
+    - _Requirements: 2.2, 2.3, 2.4, 2.5_
+
+  - [x] 3.4 Phase 4: Infrastructure Updates
+    - Remove all RDS PostgreSQL components from `infrastructure/app.py`
+    - Remove RDS instance definitions, VPC, subnets, and security groups for database
+    - Remove database credentials in Secrets Manager and database maintenance Lambda functions
+    - Update environment variables: replace PostgreSQL variables with DynamoDB table names
+    - Remove `DB_SECRET_NAME`, `DB_HOST`, `DB_PORT`, `DB_NAME` environment variables
+    - Add `PROJECTS_TABLE_NAME`, `SPRINTS_TABLE_NAME`, etc. environment variables
+    - Update IAM permissions: replace RDS permissions with DynamoDB permissions
+    - Remove VPC and RDS access permissions, add DynamoDB read/write and index query permissions
+    - Update all Lambda function environment variable configurations
+    - _Bug_Condition: isBugCondition(input) where input.deployment_environment == 'SERVERLESS'_
+    - _Expected_Behavior: Serverless-only infrastructure without VPC complexity from design_
+    - _Preservation: Authentication, API Gateway, and S3 components unchanged from design_
+    - _Requirements: 2.6, 2.7_
+
+  - [x] 3.5 Phase 5: Data Migration Strategy
+    - Create migration script `migration/postgresql_to_dynamodb.py`
+    - Extract all existing data from PostgreSQL using current connection logic
+    - Transform relational data to DynamoDB item format with proper composite keys
+    - Implement batch write operations to DynamoDB tables with error handling and retry logic
+    - Validate data integrity after migration: verify record counts and key data fields
+    - Create rollback capability: export PostgreSQL data to S3 before migration
+    - Create DynamoDB table snapshots after migration for rollback safety
+    - Provide rollback script to restore PostgreSQL if migration issues occur
+    - _Bug_Condition: isBugCondition(input) for all existing data operations_
+    - _Expected_Behavior: All existing data accessible via DynamoDB operations from design_
+    - _Preservation: Data integrity and business relationships from design_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+
+  - [x] 3.6 Remove PostgreSQL Dependencies and Files
+    - Remove `psycopg2-binary` from all requirements.txt files
+    - Remove PostgreSQL-specific configuration files and connection utilities
+    - Remove database schema files and PostgreSQL migration scripts
+    - Update deployment scripts to remove RDS-related commands
+    - Clean up environment configuration files to remove PostgreSQL references
+    - Remove PostgreSQL monitoring and maintenance scripts
+    - _Bug_Condition: isBugCondition(input) where PostgreSQL dependencies exist_
+    - _Expected_Behavior: Clean serverless deployment without PostgreSQL components from design_
+    - _Preservation: All other dependencies and configurations unchanged from design_
+    - _Requirements: 2.6, 2.7_
+
+  - [x] 3.7 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - DynamoDB Operations in Serverless Environment
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior for database operations
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1 with DynamoDB implementation
+    - **EXPECTED OUTCOME**: Test PASSES (confirms PostgreSQL connection bug is fixed)
+    - Verify that database operations (INSERT, UPDATE, SELECT, DELETE) now succeed using DynamoDB
+    - Confirm no connection failures, VPC networking issues, or timeout errors occur
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
+
+  - [x] 3.8 Verify preservation tests still pass
+    - **Property 2: Preservation** - API Response Compatibility and Non-Database Operations
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2 with DynamoDB implementation
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions in non-database operations)
+    - Verify API Gateway endpoints return identical JSON structures after migration
+    - Verify authentication, business logic, and external integrations work identically
+    - Confirm all tests still pass after migration (no regressions introduced)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Run complete test suite including bug condition and preservation tests
+  - Verify all database operations work correctly with DynamoDB
+  - Verify all API endpoints return correct responses with real data (not demo data)
+  - Verify system can handle real user uploads and project data persistence
+  - Verify dashboard displays actual calculated metrics instead of sample data
+  - Confirm no PostgreSQL dependencies remain in the codebase
+  - Ensure infrastructure contains only serverless AWS components
+  - Ask the user if questions arise about the migration or if additional verification is needed

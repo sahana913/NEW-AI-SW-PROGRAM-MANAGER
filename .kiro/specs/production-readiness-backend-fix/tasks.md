@@ -1,0 +1,232 @@
+# Implementation Plan
+
+## Overview
+
+This task list implements the production readiness backend fix using the bug condition methodology. The workflow follows: (1) Write exploration test to demonstrate the bug on unfixed code, (2) Write preservation tests to capture baseline behavior, (3) Implement the fix across 8 files, (4) Verify all tests pass.
+
+## Tasks
+
+- [x] 1. Write bug condition exploration test (BEFORE implementing fix)
+  - **Property 1: Bug Condition** - Document Upload Does Not Trigger Processing
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: Deploy current infrastructure, upload test document, verify processing Lambda never invoked
+  - Test implementation details from Bug Condition in design:
+    - Deploy current (unfixed) infrastructure to test AWS account
+    - Upload test document "test-document.pdf" through frontend or API
+    - Wait 30 seconds for processing
+    - Check CloudWatch Logs for document processing Lambda invocations (will show ZERO invocations)
+    - Query Documents DynamoDB table for document status (will show "PENDING_UPLOAD")
+    - Request delay prediction for a project (will log "Delay prediction endpoint unavailable; using heuristic prediction")
+    - Navigate to dashboard (will return demo data with `"source": "DEMO"`)
+  - The test assertions should match the Expected Behavior Properties from design:
+    - ASSERT document processing Lambda was invoked (will FAIL - proves bug exists)
+    - ASSERT document status is "UPLOADED" (will FAIL - proves bug exists)
+    - ASSERT prediction uses SageMaker endpoint or clear fallback indication (will FAIL - proves bug exists)
+    - ASSERT dashboard returns real data, not demo data (will FAIL - proves bug exists)
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bug exists)
+  - Document counterexamples found:
+    - Document processing Lambda never invoked when document uploaded to S3
+    - Document status remains "PENDING_UPLOAD" indefinitely
+    - Predictions use heuristic fallback without clear indication
+    - Dashboard returns hardcoded demo data instead of real project data
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.4, 2.5, 2.8, 2.9, 2.11, 2.13, 2.14_
+
+- [ ] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Existing Functionality Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for non-buggy inputs (operations that do NOT involve document processing, prediction generation, or dashboard data retrieval)
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements:
+    - Authentication flow: Authenticate user with Cognito → Verify JWT token validated by Lambda authorizer → Verify tenant isolation enforced through authorizer context
+    - User management: Create user → List users → Update user role → Verify response formats identical
+    - Integration configuration: Configure Jira integration → Configure Azure DevOps integration → Verify Secrets Manager operations work
+    - Rate limiting: Make 1001 requests per second → Verify 429 throttle response
+    - Error responses: Invalid body → Verify 400 validation error → No auth token → Verify 401 error → Internal error → Verify 500 error
+    - DynamoDB data model: Create project → Verify PK/SK pattern → Query using GSI → Verify query response format
+    - Lambda configuration: Verify memory configurations from MEMORY_CONFIG → Verify X-Ray tracing enabled
+    - Logging: Verify structured logging with log_api_request, log_data_modification, log_error
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23_
+
+- [x] 3. Fix production readiness backend issues
+
+  - [x] 3.1 Fix S3 event notification in storage_stack.py
+    - Add `document_processing_function` parameter to `StorageStack.__init__` method signature
+    - Import `aws_s3_notifications` from `aws_cdk`
+    - After creating `self.documents_bucket`, add S3 event notification to trigger document processing Lambda when objects are created
+    - Call `self.documents_bucket.add_event_notification(s3.EventType.OBJECT_CREATED, s3_notifications.LambdaDestination(document_processing_function))`
+    - Grant the document processing Lambda permission to be invoked by S3 (handled automatically by `add_event_notification`)
+    - Update `app.py` to pass `document_processing_function` reference to `StorageStack` (requires resolving circular dependency - see subtask 3.1.1)
+    - _Bug_Condition: isBugCondition(system_state) where system_state.s3_event_notification_configured == FALSE_
+    - _Expected_Behavior: When document uploaded to S3, S3 event notification SHALL trigger document processing Lambda automatically_
+    - _Preservation: Existing document upload flow with pre-signed URLs SHALL continue to work_
+    - _Requirements: 1.1, 1.2, 2.1, 2.2_
+
+    - [x] 3.1.1 Resolve circular dependency between StorageStack and ApiGatewayStack
+      - Current issue: StorageStack needs document processing Lambda from ApiGatewayStack, but ApiGatewayStack depends on StorageStack for buckets
+      - Solution: Create document processing Lambda in ApiGatewayStack, then pass reference to StorageStack
+      - Update `app.py`: Create `api_gateway_stack` BEFORE `storage_stack`
+      - Update `api_gateway_stack`: Export `document_processing_function` as instance attribute
+      - Update `storage_stack`: Accept `document_processing_function` parameter in `__init__`
+      - Update `app.py`: Pass `document_processing_function=api_gateway_stack.document_processing_function` to `StorageStack`
+      - Update dependencies: `storage_stack.add_dependency(api_gateway_stack)` (reverses current dependency)
+      - Alternative solution if circular dependency cannot be resolved: Create separate `LambdaStack` that creates all Lambda functions, then pass references to both `StorageStack` and `ApiGatewayStack`
+      - _Requirements: 1.1, 1.2, 2.1, 2.2_
+
+  - [x] 3.2 Fix environment variables in api_gateway_stack.py
+    - In `ApiGatewayStack._create_lambda_functions`, add SageMaker endpoint environment variables to `common_env` dictionary:
+      - `common_env["DELAY_CLASSIFIER_ENDPOINT"] = os.environ.get("DELAY_CLASSIFIER_ENDPOINT", "")`
+      - `common_env["DELAY_REGRESSOR_ENDPOINT"] = os.environ.get("DELAY_REGRESSOR_ENDPOINT", "")`
+      - `common_env["WORKLOAD_ENDPOINT"] = os.environ.get("WORKLOAD_ENDPOINT", "")`
+    - Add SNS topic ARN for notifications to `common_env`:
+      - `common_env["NOTIFICATION_TOPIC_ARN"] = self.alarm_topic.topic_arn if self.alarm_topic else ""`
+    - Verify all DynamoDB table names use consistent `_TABLE_NAME` suffix (already implemented for core tables and project management tables)
+    - _Bug_Condition: isBugCondition(system_state) where system_state.sagemaker_endpoints_configured == FALSE OR system_state.dynamodb_table_env_vars_configured == FALSE_
+    - _Expected_Behavior: Lambda functions SHALL have SageMaker endpoint environment variables configured (or empty strings for graceful fallback) and SNS topic ARN for error notifications_
+    - _Preservation: Existing environment variables for DynamoDB tables, Cognito, and S3 buckets SHALL remain unchanged_
+    - _Requirements: 1.4, 2.4, 2.5, 2.9, 2.22, 2.23, 2.24, 2.25_
+
+  - [x] 3.3 Fix IAM permissions in api_gateway_stack.py
+    - In `ApiGatewayStack._grant_service_permissions`, fix hardcoded S3 bucket ARNs:
+      - Document upload service: Change `"arn:aws:s3:::ai-sw-pm-documents-*/*"` to `f"{self.documents_bucket.bucket_arn}/*"` (requires checking if `self.documents_bucket` is not None)
+      - Document processing service: Change `"arn:aws:s3:::ai-sw-pm-documents-*/*"` to `f"{self.documents_bucket.bucket_arn}/*"`
+      - PDF export service: Change `"arn:aws:s3:::ai-sw-pm-reports-*/*"` to `f"{self.reports_bucket.bucket_arn}/*"` (requires checking if `self.reports_bucket` is not None)
+    - Grant document processing Lambda DynamoDB write permissions:
+      - Add `self.documents_table.grant_write_data(lambda_function)` to document_processing service permissions
+    - Grant prediction Lambda DynamoDB read permissions for project management tables:
+      - Add conditional grants for `projects_table`, `sprints_table`, `backlog_items_table`, `milestones_table`, `resources_table`, `dependencies_table` (check if not None)
+    - Grant dashboard Lambda DynamoDB read permissions:
+      - Add conditional grants for `health_scores_table`, `sprints_table`, `milestones_table`, `resources_table`, `dependencies_table` (check if not None)
+    - Grant document processing Lambda SNS publish permissions:
+      - Add `lambda_function.add_to_role_policy(iam.PolicyStatement(actions=["sns:Publish"], resources=[self.alarm_topic.topic_arn]))` to document_processing service permissions
+    - _Bug_Condition: isBugCondition(system_state) where system_state.lambda_iam_permissions_granted == FALSE_
+    - _Expected_Behavior: Lambda functions SHALL have IAM permissions to access actual S3 buckets (not hardcoded ARNs), DynamoDB tables, and SNS topics_
+    - _Preservation: Existing IAM permissions for Cognito, Secrets Manager, Bedrock, Textract, and SageMaker SHALL remain unchanged_
+    - _Requirements: 2.6, 2.12, 2.17, 2.18, 2.19, 2.20, 2.21_
+
+  - [x] 3.4 Add CloudWatch alarms in api_gateway_stack.py
+    - In `ApiGatewayStack._create_alarms`, add data persistence failure alarm:
+      - Monitor `Errors` metric for document processing Lambda
+      - Threshold: 1 error in 5 minutes
+      - Action: Send SNS notification to `self.alarm_topic`
+      - Alarm name: "ai-sw-pm-document-processing-errors"
+    - Add prediction generation failure alarm:
+      - Monitor `Errors` metric for prediction Lambda
+      - Threshold: 5 errors in 15 minutes
+      - Action: Send SNS notification to `self.alarm_topic`
+      - Alarm name: "ai-sw-pm-prediction-errors"
+    - Add dashboard data staleness alarm (requires custom metric):
+      - Note: This requires the dashboard Lambda to publish a custom CloudWatch metric `DashboardDataAge`
+      - Monitor custom metric `DashboardDataAge`
+      - Threshold: Data age > 24 hours (86400 seconds)
+      - Action: Send SNS notification to `self.alarm_topic`
+      - Alarm name: "ai-sw-pm-dashboard-data-staleness"
+      - Mark as optional if custom metric publishing is not implemented in this fix
+    - _Bug_Condition: isBugCondition(system_state) where monitoring for data operations is missing_
+    - _Expected_Behavior: CloudWatch alarms SHALL trigger when data persistence operations fail, prediction generation fails, or dashboard data becomes stale_
+    - _Preservation: Existing CloudWatch alarms for API 5XX errors, latency, and Lambda throttles SHALL remain unchanged_
+    - _Requirements: 2.26, 2.27, 2.28_
+
+  - [x] 3.5 Remove demo data fallback in dashboard_aggregator.py
+    - In `src/dashboard/dashboard_aggregator.py`, locate the `get_project_summaries` function
+    - Remove the `except Exception as e:` block that returns hardcoded demo data
+    - Add logging before propagating exception: `logger.error(f"Failed to get project summaries: {str(e)}", extra={"tenant_id": tenant_id})`
+    - Let exceptions propagate to the Lambda handler
+    - In `src/dashboard/handler.py`, update `lambda_handler` to catch exceptions from `dashboard_aggregator.get_dashboard_overview()`
+    - Return proper error response: `{"statusCode": 503, "body": json.dumps({"error": {"code": "SERVICE_UNAVAILABLE", "message": "Dashboard data temporarily unavailable"}})}`
+    - _Bug_Condition: isBugCondition(system_state) where dashboard returns demo data instead of real data_
+    - _Expected_Behavior: When dashboard data is unavailable, SHALL return 503 Service Unavailable error instead of demo data_
+    - _Preservation: Dashboard data aggregation logic (project summaries, portfolio health, RAG status, health score trends) SHALL remain unchanged_
+    - _Requirements: 2.8, 2.14_
+
+  - [x] 3.6 Fix frontend hardcoded project IDs
+    - In `frontend/src/components/Documents/DocumentUpload.tsx`, update `uploadFile` function:
+      - Change `DEFAULT_PROJECT_ID` usage to `props.projectId || DEFAULT_PROJECT_ID`
+      - Add `projectId?: string` to `DocumentUploadProps` interface
+    - In `frontend/src/components/Dashboard/PredictionCharts.tsx`, verify `loadPredictions` function:
+      - Confirm it uses `props.projectId || ''` (already implemented)
+      - Confirm it skips API call when no project ID available (already implemented)
+    - _Bug_Condition: isBugCondition(system_state) where frontend uses hardcoded project ID instead of active project context_
+    - _Expected_Behavior: Frontend SHALL use currently active project ID from application state when making API requests_
+    - _Preservation: Existing frontend authentication, error handling, and API client configuration SHALL remain unchanged_
+    - _Requirements: 2.29, 2.30_
+
+  - [x] 3.7 Add frontend auto-refresh on upload
+    - In `frontend/src/components/Dashboard/Dashboard.tsx`, add auto-refresh state:
+      - Add `const [refreshKey, setRefreshKey] = useState(0)` state
+      - Pass `onUploadComplete={() => setRefreshKey(prev => prev + 1)}` to `DocumentUpload` component
+      - Pass `refreshKey={refreshKey}` to `PredictionCharts` component
+    - Verify `PredictionCharts` component has `useEffect` dependency on `props.refreshKey` (already implemented)
+    - _Bug_Condition: isBugCondition(system_state) where frontend does not automatically refresh predictions after document upload_
+    - _Expected_Behavior: When document upload completes successfully, frontend SHALL automatically trigger prediction refresh for the project_
+    - _Preservation: Existing frontend component lifecycle, state management, and rendering logic SHALL remain unchanged_
+    - _Requirements: 2.11, 2.29_
+
+  - [x] 3.8 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Document Upload Triggers Processing and Predictions
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior
+    - When this test passes, it confirms the expected behavior is satisfied
+    - Run bug condition exploration test from step 1:
+      - Deploy fixed infrastructure to test AWS account
+      - Upload test document "test-document.pdf" through frontend or API
+      - Wait 30 seconds for processing
+      - Check CloudWatch Logs for document processing Lambda invocations (should show invocations)
+      - Query Documents DynamoDB table for document status (should show "UPLOADED")
+      - Request delay prediction for a project (should use SageMaker endpoint or log clear fallback indication)
+      - Navigate to dashboard (should return real data, not demo data)
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - Verify all assertions pass:
+      - ASSERT document processing Lambda was invoked (should PASS)
+      - ASSERT document status is "UPLOADED" (should PASS)
+      - ASSERT prediction uses SageMaker endpoint or clear fallback indication (should PASS)
+      - ASSERT dashboard returns real data, not demo data (should PASS)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16, 2.17, 2.18, 2.19, 2.20, 2.21, 2.22, 2.23, 2.24, 2.25, 2.26, 2.27, 2.28, 2.29, 2.30, 2.31, 2.32_
+
+  - [x] 3.9 Verify preservation tests still pass
+    - **Property 2: Preservation** - Existing Functionality Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2:
+      - Authentication flow: Authenticate user → Verify JWT token validated → Verify tenant isolation enforced
+      - User management: Create user → List users → Update user role → Verify response formats identical
+      - Integration configuration: Configure Jira → Configure Azure DevOps → Verify Secrets Manager operations work
+      - Rate limiting: Make 1001 requests per second → Verify 429 throttle response
+      - Error responses: Invalid body → Verify 400 error → No auth token → Verify 401 error → Internal error → Verify 500 error
+      - DynamoDB data model: Create project → Verify PK/SK pattern → Query using GSI → Verify query response format
+      - Lambda configuration: Verify memory configurations → Verify X-Ray tracing enabled
+      - Logging: Verify structured logging with log_api_request, log_data_modification, log_error
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all tests still pass after fix (no regressions)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23_
+
+- [ ] 4. Checkpoint - Ensure all tests pass and system is production-ready
+  - Verify all tests pass:
+    - Bug condition exploration test (task 1) now passes
+    - Preservation property tests (task 2) still pass
+  - Verify documents are processed:
+    - Upload multiple test documents through frontend
+    - Verify all documents have status "UPLOADED" in DynamoDB
+    - Verify text extraction completed for all documents
+  - Verify predictions generated:
+    - Request delay predictions for multiple projects
+    - Verify predictions use SageMaker endpoints (if configured) or clear fallback indication
+    - Verify prediction results stored in Predictions DynamoDB table
+  - Verify dashboard shows real data:
+    - Navigate to dashboard
+    - Verify project summaries show real project data (not demo data)
+    - Verify health scores, RAG status, and metrics are calculated from real data
+  - Verify CloudWatch alarms configured:
+    - Check CloudWatch console for alarms: "ai-sw-pm-document-processing-errors", "ai-sw-pm-prediction-errors", "ai-sw-pm-dashboard-data-staleness"
+    - Verify alarms are in "OK" state (no errors)
+  - Document any issues:
+    - If any test fails, document the failure and root cause
+    - If any functionality is broken, document the regression
+    - If any alarm is in "ALARM" state, investigate and document the issue
+  - Ask the user if questions arise or if additional verification is needed
